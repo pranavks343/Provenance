@@ -7,6 +7,7 @@ import tiktoken
 from openai import OpenAI, APIError, RateLimitError
 from dotenv import load_dotenv
 
+
 load_dotenv()
 
 if not os.getenv("OPENAI_API_KEY"):
@@ -15,6 +16,7 @@ if not os.getenv("OPENAI_API_KEY"):
 client = OpenAI()
 MODEL = "text-embedding-3-small"
 MAX_TOKENS = 8191
+EMBEDDING_DIM = 1536
 ENCODER = tiktoken.encoding_for_model(MODEL)
 
 
@@ -52,12 +54,15 @@ def embed(texts: list[str]) -> np.ndarray:
         texts: List of input strings to embed.
 
     Returns:
-        Array of shape (len(texts), 1536) with one row per input.
+        Array of shape (len(texts), EMBEDDING_DIM) with one row per input.
+        Returns an empty (0, EMBEDDING_DIM) array if texts is empty.
 
     Raises:
         RuntimeError: On rate limit or API error.
         ValueError: If any input exceeds MAX_TOKENS.
     """
+    if not texts:
+        return np.empty((0, EMBEDDING_DIM), dtype=np.float64)
     validate(texts)
     try:
         resp = client.embeddings.create(model=MODEL, input=texts)
@@ -82,25 +87,30 @@ def cosine(a: np.ndarray, b: np.ndarray) -> float:
 
 
 def similarity_matrix(vecs: np.ndarray) -> np.ndarray:
-    """Compute pairwise cosine similarities for pre-normalized vectors.
+    """Compute pairwise cosine similarities for any set of vectors.
+
+    Normalizes rows internally, so works for any embedding model
+    regardless of whether outputs are unit-length.
 
     Args:
-        vecs: Array of shape (N, D) with L2-normalized rows.
+        vecs: Array of shape (N, D).
 
     Returns:
         Array of shape (N, N) where entry [i, j] is cosine(vecs[i], vecs[j]).
     """
-    return vecs @ vecs.T
+    norms = np.linalg.norm(vecs, axis=1, keepdims=True)
+    normalized = vecs / norms
+    return normalized @ normalized.T
 
 
 def main() -> None:
-    """Sanity test: embed 5 sentences and verify expected similarity structure."""
+    """Sanity test: verify embeddings cluster related topics and separate unrelated ones."""
     sentences = [
         "The cat sat on the mat.",
         "A feline rested on the rug.",
-        "Quantum computers use qubits.",
-        "Machine learning models need data.",
-        "Neural networks learn from examples.",
+        "The stock market crashed yesterday.",
+        "Bitcoin prices surged overnight.",
+        "Quantum mechanics describes particles.",
     ]
 
     vecs = embed(sentences)
@@ -110,9 +120,12 @@ def main() -> None:
     print("\nSimilarity matrix:")
     print(np.round(sim, 3))
 
-    closest_to_0 = int(np.argmax(sim[0, 1:])) + 1
-    assert closest_to_0 == 1, f"expected sentence 1 closest to 0, got {closest_to_0}"
-    print(f"\n✓ Sentence 1 is most similar to sentence 0 (cosine = {sim[0, 1]:.3f})")
+    assert int(np.argmax(sim[0, 1:])) + 1 == 1, "sentence 0 should be closest to 1"
+    assert int(np.argmax(np.delete(sim[2], 2))) == 2, "sentence 2 should be closest to 3"
+    assert sim[0, 1] > sim[0, 2], "intra-cluster sim must exceed inter-cluster sim"
+    assert sim[0, 1] > sim[0, 4], "pets should be more similar than pet/physics"
+
+    print("\n✓ All clustering and separation checks passed.")
 
 
 if __name__ == "__main__":
