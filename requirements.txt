@@ -2,3 +2,5 @@ chromadb
 openai
 tiktoken
 numpy
+pypdf
+langchain-text-splitters
