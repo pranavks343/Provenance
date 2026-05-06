@@ -4,3 +4,6 @@ tiktoken
 numpy
 pypdf
 langchain-text-splitters
+langchain-openai
+langchain-core
+python-dotenv
