@@ -14,9 +14,12 @@ The empty-context branch returns a fixed string without calling the LLM,
 so a query that retrieves no chunks costs zero generation tokens.
 """
 
+from pathlib import Path
+
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import (
+    Runnable,
     RunnableBranch,
     RunnableLambda,
     RunnableParallel,
@@ -44,6 +47,11 @@ USER_PROMPT = "Context:\n{context}\n\nQuestion: {question}"
 def format_context(docs: list[dict]) -> str:
     """Render retrieved chunks as a single string with source headers.
 
+    Source paths are reduced to their basename so that absolute paths
+    (which may contain usernames or other host-specific structure) are
+    not echoed back to the user via the LLM. The full path stays in
+    chunk metadata for downstream debugging.
+
     Empty input returns an empty string, which the chain treats as a
     signal to short-circuit and skip the LLM call.
     """
@@ -52,12 +60,13 @@ def format_context(docs: list[dict]) -> str:
     parts = []
     for d in docs:
         meta = d["metadata"]
-        header = f"[Source: {meta['source']}, Page {meta['page']}]"
+        source_display = Path(meta["source"]).name
+        header = f"[Source: {source_display}, Page {meta['page']}]"
         parts.append(f"{header}\n{d['text']}")
     return "\n\n".join(parts)
 
 
-def build_chain(store: VectorStore, k: int = DEFAULT_K):
+def build_chain(store: VectorStore, k: int = DEFAULT_K) -> Runnable:
     """Build the full LCEL RAG chain.
 
     Args:
