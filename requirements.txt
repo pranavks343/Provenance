@@ -1,5 +1,8 @@
 chromadb
+fastapi
 openai
+pydantic
+python-multipart
 tiktoken
 numpy
 pypdf
@@ -7,3 +10,4 @@ langchain-text-splitters
 langchain-openai
 langchain-core
 python-dotenv
+uvicorn
