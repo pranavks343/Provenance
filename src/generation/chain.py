@@ -1,6 +1,6 @@
-"""LCEL RAG chain: question -> retrieve -> format context -> LLM answer.
+"""LCEL RAG chains for streaming text and structured JSON answers.
 
-Chain shape::
+Chain shape:
 
     str (question)
       |  RunnableParallel
@@ -8,9 +8,9 @@ Chain shape::
     {context: str, question: str}
       |  RunnableBranch (short-circuit if context is empty)
       v
-    str (answer)
+    str (answer) or Answer (structured)
 
-The empty-context branch returns a fixed string without calling the LLM,
+The empty-context branch returns a fixed response without calling the LLM,
 so a query that retrieves no chunks costs zero generation tokens.
 """
 
@@ -39,10 +39,11 @@ SYSTEM_PROMPT = (
     "You are a careful research assistant. Answer ONLY using the provided "
     "context. After each claim, cite the source inline as "
     "[Source: <source>, Page <n>]. If the context does not contain the "
-    "answer, say so explicitly — do not invent facts."
+    "answer, say so explicitly; do not invent facts."
 )
 
 USER_PROMPT = "Context:\n{context}\n\nQuestion: {question}"
+
 STRUCTURED_SYSTEM_PROMPT = (
     "You are a careful research assistant. Answer ONLY using the provided "
     "context. Cite the exact source and page for each non-trivial claim. "
@@ -52,39 +53,22 @@ STRUCTURED_SYSTEM_PROMPT = (
 
 
 def format_context(docs: list[dict]) -> str:
-    """Render retrieved chunks as a single string with source headers.
-
-    Source paths are reduced to their basename so that absolute paths
-    (which may contain usernames or other host-specific structure) are
-    not echoed back to the user via the LLM. The full path stays in
-    chunk metadata for downstream debugging.
-
-    Empty input returns an empty string, which the chain treats as a
-    signal to short-circuit and skip the LLM call.
-    """
+    """Render retrieved chunks as one string with source headers."""
     if not docs:
         return ""
+
     parts = []
     for d in docs:
         meta = d["metadata"]
         source_display = Path(meta["source"]).name
         header = f"[Source: {source_display}, Page {meta['page']}]"
         parts.append(f"{header}\n{d['text']}")
+
     return "\n\n".join(parts)
 
 
 def build_chain(store: VectorStore, k: int = DEFAULT_K) -> Runnable:
-    """Build the full LCEL RAG chain.
-
-    Args:
-        store: A populated VectorStore.
-        k: Number of chunks to retrieve per query.
-
-    Returns:
-        A Runnable that takes a question string and yields/returns the
-        answer string. Supports `.invoke()`, `.stream()`, and async
-        variants.
-    """
+    """Build the LCEL RAG chain that returns plain text."""
 
     def retrieve_and_format(question: str) -> str:
         query_vec = embed([question])[0].tolist()
@@ -113,11 +97,11 @@ def build_chain(store: VectorStore, k: int = DEFAULT_K) -> Runnable:
 
 
 def build_structured_chain(store: VectorStore, k: int = DEFAULT_K) -> Runnable:
-    """Build an LCEL RAG chain that returns an Answer schema."""
+    """Build the LCEL RAG chain that returns an Answer schema."""
 
     def retrieve_and_format(question: str) -> str:
-        query_vec = embed([question])[0].tolist()
-        docs = store.query(query_vec, n_results=k)
+        embedding = embed([question])[0].tolist()
+        docs = store.query(embedding, n_results=k)
         return format_context(docs)
 
     prompt = ChatPromptTemplate.from_messages(

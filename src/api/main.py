@@ -11,6 +11,7 @@ from fastapi.responses import StreamingResponse
 
 from src.api.schemas import Answer, QueryRequest, UploadResponse
 from src.generation.chain import build_chain, build_structured_chain
+
 from src.ingestion.chunker import chunk_pages
 from src.ingestion.embedder import embed
 from src.ingestion.loader import load_pdf
