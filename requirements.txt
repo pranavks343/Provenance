@@ -11,3 +11,4 @@ langchain-openai
 langchain-core
 python-dotenv
 uvicorn
+langchain-community

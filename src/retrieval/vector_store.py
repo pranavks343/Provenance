@@ -97,6 +97,35 @@ class VectorStore:
             metadatas=metadatas,
         )
 
+    def filter_new(
+        self, texts: list[str]
+    ) -> tuple[list[str], list[int], list[str]]:
+        """Return only texts whose hash-IDs are not yet in the collection.
+
+        Args:
+            texts: List of all candidate texts.
+
+        Returns:
+            A tuple of (new_texts, new_indices, new_ids):
+            - new_texts: subset of `texts` that need to be embedded
+            - new_indices: original indices of those texts (for aligning metadata)
+            - new_ids: the deterministic IDs for the new texts
+        """
+        candidate_ids = [self._hash_id(text) for text in texts]
+        existing_ids = set(self.collection.get(ids=candidate_ids)["ids"])
+
+        new_texts = []
+        new_indices = []
+        new_ids = []
+
+        for idx, (text, id_) in enumerate(zip(texts, candidate_ids)):
+            if id_ not in existing_ids:
+                new_texts.append(text)
+                new_indices.append(idx)
+                new_ids.append(id_)
+
+        return new_texts, new_indices, new_ids
+
     def query(
         self,
         query_embedding: list[float],

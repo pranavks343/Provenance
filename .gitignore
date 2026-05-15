@@ -2,3 +2,4 @@
 .env
 chroma_db/
 data/uploads/
+.llm_cache.sqlite

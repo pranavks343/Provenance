@@ -14,11 +14,14 @@ import time
 from contextlib import contextmanager
 from pathlib import Path
 
+
 from src.generation.chain import build_chain
 from src.ingestion.chunker import chunk_pages
 from src.ingestion.embedder import embed
 from src.ingestion.loader import load_pdf
 from src.retrieval.vector_store import VectorStore
+from src.generation.cache import enable_llm_cache
+
 
 PERSIST_PATH = "./chroma_db"
 RETRIEVAL_K = 4
@@ -48,7 +51,7 @@ def collection_name_for(pdf_path: Path) -> str:
 
 
 def ingest(pdf_path: Path, store: VectorStore) -> None:
-    """Load, chunk, embed, and store the PDF if the store is empty."""
+    """Load, chunk, then embed + store only the chunks that aren't already indexed."""
     with stage("load_pdf") as info:
         pages = load_pdf(str(pdf_path))
         info["detail"] = f"{len(pages)} pages"
@@ -61,20 +64,40 @@ def ingest(pdf_path: Path, store: VectorStore) -> None:
         print("No extractable text in PDF — nothing to index.", file=sys.stderr)
         sys.exit(2)
 
+    # Dedup pass: figure out which chunks are actually new
+    with stage("filter_new") as info:
+        new_texts, new_indices, new_ids = store.filter_new(
+            [c["text"] for c in chunks]
+        )
+        info["detail"] = f"{len(new_texts)}/{len(chunks)} new"
+
+    # Short-circuit if nothing to do
+    if not new_texts:
+        print(f"[stage] all {len(chunks)} chunks already indexed (cache hit)")
+        return
+
+    # Embed ONLY the new chunks
     with stage("embed") as info:
-        embeddings = embed([c["text"] for c in chunks])
-        info["detail"] = f"{len(embeddings)} vectors"
+        new_embeddings = embed(new_texts)
+        info["detail"] = f"{len(new_embeddings)} vectors"
+
+    # Align metadatas to new_texts using the preserved indices
+    new_metadatas = [chunks[i]["metadata"] for i in new_indices]
 
     with stage("store.add") as info:
         store.add(
-            texts=[c["text"] for c in chunks],
-            embeddings=embeddings,
-            metadatas=[c["metadata"] for c in chunks],
+            texts=new_texts,
+            embeddings=new_embeddings,
+            metadatas=new_metadatas,
+            ids=new_ids,
         )
-        info["detail"] = f"total={store.count()}"
+        info["detail"] = f"added={len(new_texts)}, total={store.count()}"
+
+    print(f"[stage] embedded {len(new_texts)}/{len(chunks)} chunks (others cached)")
 
 
 def main() -> None:
+    enable_llm_cache()
     if len(sys.argv) != 3:
         print('Usage: python -m scripts.cli <path-to-pdf> "<question>"', file=sys.stderr)
         sys.exit(1)
