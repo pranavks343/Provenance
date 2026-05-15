@@ -4,14 +4,12 @@ import hashlib
 import json
 from contextlib import asynccontextmanager
 from pathlib import Path
-
+from src.generation.cache import enable_llm_cache
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
-
 from src.api.schemas import Answer, QueryRequest, UploadResponse
 from src.generation.chain import build_chain, build_structured_chain
-
 from src.ingestion.chunker import chunk_pages
 from src.ingestion.embedder import embed
 from src.ingestion.loader import load_pdf
@@ -40,6 +38,7 @@ def get_store(document_id: str) -> VectorStore:
 async def lifespan(app: FastAPI):
     """Startup/shutdown: ensure upload dir exists, clear cache on exit."""
     UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    enable_llm_cache()
     yield
     _stores.clear()
 
@@ -74,7 +73,7 @@ async def upload(file: UploadFile = File(...)) -> UploadResponse:
 
     store = get_store(document_id)
 
-    # Cache hit: skip ingestion entirely.
+    # Document-level cache hit: this PDF was fully ingested before.
     if store.count() > 0:
         return UploadResponse(
             document_id=document_id, pages=-1, chunks=store.count()
@@ -85,17 +84,31 @@ async def upload(file: UploadFile = File(...)) -> UploadResponse:
         raise HTTPException(400, "PDF has no extractable text")
 
     chunks = chunk_pages(pages)
-    embeddings = embed([c["text"] for c in chunks])
+
+    # Chunk-level dedup: only embed chunks not already stored.
+    new_texts, new_indices, new_ids = store.filter_new(
+        [c["text"] for c in chunks]
+    )
+
+    if not new_texts:
+        # All chunks happen to exist (e.g. shared across PDFs in same collection).
+        return UploadResponse(
+            document_id=document_id, pages=len(pages), chunks=store.count()
+        )
+
+    new_embeddings = embed(new_texts)
+    new_metadatas = [chunks[i]["metadata"] for i in new_indices]
+
     store.add(
-        texts=[c["text"] for c in chunks],
-        embeddings=embeddings,
-        metadatas=[c["metadata"] for c in chunks],
+        texts=new_texts,
+        embeddings=new_embeddings,
+        metadatas=new_metadatas,
+        ids=new_ids,
     )
 
     return UploadResponse(
         document_id=document_id, pages=len(pages), chunks=len(chunks)
     )
-
 
 @app.post("/query")
 async def query(request: QueryRequest) -> StreamingResponse:
