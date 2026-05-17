@@ -32,24 +32,33 @@ from src.ingestion.embedder import embed
 from src.retrieval.vector_store import VectorStore
 
 LLM_MODEL = "gpt-4o-mini"
-DEFAULT_K = 4
+DEFAULT_K = 6
 EMPTY_CONTEXT_MESSAGE = "No context found in the indexed documents."
 
-SYSTEM_PROMPT = (
-    "You are a careful research assistant. Answer ONLY using the provided "
-    "context. After each claim, cite the source inline as "
-    "[Source: <source>, Page <n>]. If the context does not contain the "
-    "answer, say so explicitly; do not invent facts."
-)
+
 
 USER_PROMPT = "Context:\n{context}\n\nQuestion: {question}"
 
-STRUCTURED_SYSTEM_PROMPT = (
-    "You are a careful research assistant. Answer ONLY using the provided "
-    "context. Cite the exact source and page for each non-trivial claim. "
-    "If the context does not contain the answer, say so explicitly, return "
-    "no citations, set confidence to low, and set used_context to false."
-)
+SYSTEM_PROMPT = """You are a grounded research assistant. Follow these rules strictly:
+
+1. GROUNDING: Answer ONLY from the <context> block. Never use outside knowledge.
+2. CITATIONS: Every factual claim must end with [Source: <source>, Page <n>]. 
+   Multiple sources → [Source: A, Page 2; Source: B, Page 5].
+3. ABSTAIN: If the answer is not in context, reply exactly:
+   "I cannot answer this from the provided documents."
+4. NO HALLUCINATION: Do not paraphrase beyond what the context supports. 
+   Do not fill gaps with plausible-sounding facts.
+5. QUOTES: For direct quotes, use "exact text" [Source: <source>, Page <n>].
+
+<context>
+{context}
+</context>
+
+<question>
+{question}
+</question>
+
+Answer:"""
 
 
 def format_context(docs: list[dict]) -> str:
@@ -105,7 +114,7 @@ def build_structured_chain(store: VectorStore, k: int = DEFAULT_K) -> Runnable:
         return format_context(docs)
 
     prompt = ChatPromptTemplate.from_messages(
-        [("system", STRUCTURED_SYSTEM_PROMPT), ("human", USER_PROMPT)]
+        [("system",SYSTEM_PROMPT), ("human", USER_PROMPT)]
     )
 
     llm = ChatOpenAI(model=LLM_MODEL, temperature=0).with_structured_output(
