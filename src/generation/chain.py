@@ -30,11 +30,14 @@ from langchain_openai import ChatOpenAI
 from src.api.schemas import Answer
 from src.ingestion.embedder import embed
 from src.retrieval.vector_store import VectorStore
+from src.retrieval.reranker import CohereReranker
 
+_reranker: CohereReranker | None = None
 LLM_MODEL = "gpt-4o-mini"
 DEFAULT_K = 6
+K_INITIAL = 20   # broad retrieval before rerank
+K_FINAL = 4      # what reaches the LLM
 EMPTY_CONTEXT_MESSAGE = "No context found in the indexed documents."
-
 
 
 USER_PROMPT = "Context:\n{context}\n\nQuestion: {question}"
@@ -61,6 +64,14 @@ SYSTEM_PROMPT = """You are a grounded research assistant. Follow these rules str
 Answer:"""
 
 
+def get_reranker() -> CohereReranker:
+    """Lazy singleton — instantiated on first call, reused for process lifetime."""
+    global _reranker
+    if _reranker is None:
+        _reranker = CohereReranker()
+    return _reranker
+
+
 def format_context(docs: list[dict]) -> str:
     """Render retrieved chunks as one string with source headers."""
     if not docs:
@@ -81,8 +92,9 @@ def build_chain(store: VectorStore, k: int = DEFAULT_K) -> Runnable:
 
     def retrieve_and_format(question: str) -> str:
         query_vec = embed([question])[0].tolist()
-        docs = store.query(query_vec, n_results=k)
-        return format_context(docs)
+        candidates = store.query(query_vec, n_results=K_INITIAL)   # broad: 20
+        reranked = get_reranker().rerank(question, candidates, top_k=K_FINAL)  # narrow: 4
+        return format_context(reranked)
 
     prompt = ChatPromptTemplate.from_messages(
         [("system", SYSTEM_PROMPT), ("human", USER_PROMPT)]
@@ -109,17 +121,16 @@ def build_structured_chain(store: VectorStore, k: int = DEFAULT_K) -> Runnable:
     """Build the LCEL RAG chain that returns an Answer schema."""
 
     def retrieve_and_format(question: str) -> str:
-        embedding = embed([question])[0].tolist()
-        docs = store.query(embedding, n_results=k)
-        return format_context(docs)
+        query_vec = embed([question])[0].tolist()
+        candidates = store.query(query_vec, n_results=K_INITIAL)
+        reranked = get_reranker().rerank(question, candidates, top_k=K_FINAL)
+        return format_context(reranked)
 
     prompt = ChatPromptTemplate.from_messages(
-        [("system",SYSTEM_PROMPT), ("human", USER_PROMPT)]
+        [("system", SYSTEM_PROMPT), ("human", USER_PROMPT)]
     )
 
-    llm = ChatOpenAI(model=LLM_MODEL, temperature=0).with_structured_output(
-        Answer
-    )
+    llm = ChatOpenAI(model=LLM_MODEL, temperature=0).with_structured_output(Answer)
 
     answer_branch = prompt | llm
     empty_branch = RunnableLambda(

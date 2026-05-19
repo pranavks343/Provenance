@@ -125,7 +125,7 @@ paper. v2 added:
 
 |-------------------------|---------------|---------------|----|
 
-| Retrieval hit-rate      | 80.0%         | // TODO       | // TODO |
+| Retrieval hit-rate      | 80.0%         | 86.7%         | +6.7% |
 
 | Faithfulness            | 0.47          | 0.42          | -0.05 ⚠️ |
 
@@ -170,6 +170,82 @@ This is a deliberately documented failed experiment. The point isn't the
 final score — it's that the evaluation harness caught a regression that a
 
 "vibes-based" prompt change would have shipped silently.
+
+
+
+### Experiment: v2 → v3 (Cohere reranking)
+
+
+
+Followed up with a two-stage retrieval pipeline: pull top-20 from Chroma,
+
+then rerank with Cohere `rerank-v3.5` down to top-4. Hypothesis: the
+
+generation step keeps pulling from training-data knowledge because the
+
+retrieved chunks are noisy — a stronger reranker should produce tighter
+
+context and force grounded answers.
+
+
+
+| Metric                  | v1 (baseline) | v2 (stricter) | v3 (+ Cohere rerank) |
+
+|-------------------------|---------------|---------------|----------------------|
+
+| Retrieval hit-rate      | 80.0%         | 86.7%         | 73.3% ⚠️              |
+
+| Faithfulness            | 0.47          | 0.42          | 0.49                 |
+
+| Answer relevancy        | 0.82          | 0.79          | 0.87                 |
+
+| Context precision       | 0.68          | 0.78          | 0.83                 |
+
+| Avg latency             | 3.9s          | 4.7s          | 4.8s (+ rerank API)  |
+
+
+
+**Mixed result.** Context precision and answer relevancy moved meaningfully
+
+(+0.05 to +0.15 over v1), but **retrieval hit-rate regressed** to 73.3% —
+
+worse than v1. The reranker is optimizing for "useful context" as judged by
+
+Cohere's model, which doesn't always coincide with "chunk from the gold
+
+page." Faithfulness barely moved (0.47 → 0.49).
+
+
+
+**Diagnosed root cause from the per-question CSV:** faithfulness is
+
+generation-bound, not retrieval-bound. Three questions scored faithfulness
+
+= 0.0 — q02 (recurrent models), q11 (self-attention definition), q23
+
+(English-French BLEU). On q23 the model answered "41.0 BLEU" when the gold
+
+is 41.8 — that exact number does not appear in the retrieved chunk; it came
+
+from the LLM's training-data memory of the Transformer paper. On q11 the
+
+answer added "It has been used successfully in reading comprehension..."
+
+which is not in the chunk at all. The retriever did its job; the LLM
+
+elaborated.
+
+
+
+**Takeaway:** reranking shifts what the LLM-as-judge metrics measure, but
+
+cannot fix the underlying failure mode — `gpt-4o-mini` knows *Attention Is
+
+All You Need* too well to ignore it. A meaningful next step would be a
+
+generator change (smaller/less-trained model, atomic-claim extraction, or
+
+explicit citation-only mode), not another retrieval tweak.
 
 
 

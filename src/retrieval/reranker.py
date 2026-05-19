@@ -1,7 +1,7 @@
 import os
-
+import time
 import cohere
-
+time.sleep(6.5)
 
 class CohereReranker:
     """Rerank retrieved chunks using Cohere's rerank-v3.5 model."""
